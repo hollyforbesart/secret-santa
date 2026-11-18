@@ -9,8 +9,8 @@ const YEAR = 60 * 60 * 24 * 365;
 const DEFAULT_SETTINGS = {
   title: 'Family Secret Santa 2026',
   welcome: "Ho ho ho! Christmas is coming and we're doing Secret Santa again. Tap below to tell us if you're in!",
-  rsvp_deadline: '',
-  draw_at: '',
+  rsvp_deadline: '2026-11-25T03:59:00.000Z', // Tue Nov 24, 11:59 PM Trinidad,
+  draw_at: '2026-11-26T23:00:00.000Z', // Thu Nov 26, 7:00 PM Trinidad,
   budget: '300 TTD',
   budget_note: "You're welcome to spend more if you'd like!",
   exchange_note: '',
@@ -550,8 +550,8 @@ async function handleApi(req, env, ctx, url) {
     if (!(await checkPin(s, String(b.pin || ''), p.pin_hash))) {
       const tries = p.failed_attempts + 1;
       if (tries >= 5) {
-        await env.DB.prepare('UPDATE people SET failed_attempts = 0, locked_until = ? WHERE id = ?').bind(new Date(Date.now() + 15 * 60000).toISOString(), p.id).run();
-        fail(429, 'Too many wrong tries. Please wait 15 minutes, or ask the organizer to reset your PIN.');
+        await env.DB.prepare('UPDATE people SET failed_attempts = 0, locked_until = ? WHERE id = ?').bind(new Date(Date.now() + 5 * 60000).toISOString(), p.id).run();
+        fail(429, 'Too many wrong tries. Please wait 5 minutes, or ask the organizer to reset your PIN.');
       }
       await env.DB.prepare('UPDATE people SET failed_attempts = ? WHERE id = ?').bind(tries, p.id).run();
       fail(401, `That PIN isn't right. Please try again. (${5 - tries} ${5 - tries === 1 ? 'try' : 'tries'} left)`);
