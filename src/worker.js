@@ -20,7 +20,7 @@ const DEFAULT_SETTINGS = {
   // One household per line. People in the same household never draw each other.
   // Matched on first name when someone RSVPs (the organizer can change it later).
   households: [
-    'Dexter, Reyann and Holly',
+    'Dexter, Reyann, Holly and Pamela',
     'Grizel, Isaiah and David',
     'Marielle and Xayvion',
     'Nikki, Vickie and Franklin',
@@ -30,6 +30,8 @@ const DEFAULT_SETTINGS = {
   ].join('\n'),
 };
 
+// A person can be in more than one household (e.g. their family + a grandparent they live with).
+// Their households are stored joined with " + ".
 function parseHouseholds(text) {
   const map = new Map();
   for (const line of String(text || '').split('\n')) {
@@ -37,7 +39,9 @@ function parseHouseholds(text) {
     if (!label) continue;
     for (const n of label.split(/,|&|\band\b/i)) {
       const k = n.trim().toLowerCase();
-      if (k) map.set(k, label);
+      if (!k) continue;
+      if (!map.has(k)) map.set(k, []);
+      if (!map.get(k).includes(label)) map.get(k).push(label);
     }
   }
   return map;
@@ -46,7 +50,7 @@ function parseHouseholds(text) {
 function presetHousehold(s, name) {
   const map = parseHouseholds(s.households);
   const key = String(name || '').trim().toLowerCase();
-  return map.get(key) || map.get(key.split(/\s+/)[0]) || '';
+  return (map.get(key) || map.get(key.split(/\s+/)[0]) || []).join(' + ');
 }
 
 // ---------------------------------------------------------------- schema
@@ -81,6 +85,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS wall (id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER, is_announcement INTEGER NOT NULL DEFAULT 0, body TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, person_id INTEGER NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, url TEXT NOT NULL DEFAULT '/', created_at TEXT NOT NULL, pushed_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS wish_photos (wish_id INTEGER PRIMARY KEY, person_id INTEGER NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, text TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_msg_pair ON messages(giver_id, receiver_id)`,
   `CREATE INDEX IF NOT EXISTS idx_notif_person ON notifications(person_id, id)`,
@@ -231,7 +236,12 @@ async function requireAdmin(env, req) {
 }
 
 // ---------------------------------------------------------------- draw logic
-const canGive = (a, b) => a.id !== b.id && !(hhKey(a.household) && hhKey(a.household) === hhKey(b.household));
+const hhSet = (s) => String(s || '').split('+').map(hhKey).filter(Boolean);
+const canGive = (a, b) => {
+  if (a.id === b.id) return false;
+  const theirs = hhSet(b.household);
+  return !hhSet(a.household).some((h) => theirs.includes(h));
+};
 
 // One big loop (A→B→C→…→A) so nobody gets themselves and nobody gets their own household.
 function findCycle(people) {
@@ -259,6 +269,27 @@ function findCycle(people) {
   return dfs() ? path : null;
 }
 
+// Prefer one big loop; if the household rules make that impossible (small groups),
+// fall back to any fair draw: everyone gives once, receives once, rules respected.
+function findDraw(people) {
+  const cycle = findCycle(people);
+  if (cycle) return cycle.map((p, i) => [p, cycle[(i + 1) % cycle.length]]);
+  const givers = shuffle([...people]);
+  const owner = new Map(); // receiver id -> giver
+  const tryGive = (g, seen) => {
+    for (const r of shuffle(people.filter((x) => canGive(g, x)))) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      const cur = owner.get(r.id);
+      if (!cur || tryGive(cur, seen)) { owner.set(r.id, g); return true; }
+    }
+    return false;
+  };
+  for (const g of givers) if (!tryGive(g, new Set())) return null;
+  const byId = new Map(people.map((p) => [p.id, p]));
+  return [...owner.entries()].map(([rid, g]) => [g, byId.get(rid)]);
+}
+
 async function runDraw(env, ctx, { manual = false } = {}) {
   // Claim the draw so two requests can't draw at once.
   const claim = await env.DB.prepare(`UPDATE settings SET value = 'drawing' WHERE key = 'draw_status' AND value = 'open'`).run();
@@ -269,13 +300,14 @@ async function runDraw(env, ctx, { manual = false } = {}) {
   try {
     const { results: people } = await env.DB.prepare(`SELECT id, name, household FROM people WHERE rsvp = 'yes' AND removed = 0`).all();
     if (people.length < 3) throw new Error(`Only ${people.length} ${people.length === 1 ? 'person has' : 'people have'} said yes — at least 3 are needed.`);
-    const cycle = findCycle(people);
-    if (!cycle) throw new Error('Could not find a fair draw with the household rules. Try removing a household block or two.');
+    const pairs = findDraw(people);
+    if (!pairs) throw new Error('Could not find a fair draw with the household rules. Try removing a household block or two.');
+    const cycle = pairs.map(([g]) => g);
     const t = nowIso();
     const stmts = [
       env.DB.prepare('DELETE FROM matches'),
       env.DB.prepare('UPDATE people SET in_draw = 0, spun_at = NULL'),
-      ...cycle.map((p, i) => env.DB.prepare('INSERT INTO matches (giver_id, receiver_id, created_at) VALUES (?, ?, ?)').bind(p.id, cycle[(i + 1) % cycle.length].id, t)),
+      ...pairs.map(([g, r]) => env.DB.prepare('INSERT INTO matches (giver_id, receiver_id, created_at) VALUES (?, ?, ?)').bind(g.id, r.id, t)),
       ...cycle.map((p) => env.DB.prepare('UPDATE people SET in_draw = 1 WHERE id = ?').bind(p.id)),
       env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('draw_status', 'drawn') ON CONFLICT(key) DO UPDATE SET value = 'drawn'`),
       env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('drawn_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(t),
@@ -461,8 +493,10 @@ async function getSantaFor(env, me) {
 }
 async function wishlistOf(env, personId) {
   const p = await env.DB.prepare('SELECT name, sizes, colours, no_thanks FROM people WHERE id = ?').bind(personId).first();
-  const { results } = await env.DB.prepare('SELECT id, text, link FROM wishes WHERE person_id = ? ORDER BY id').bind(personId).all();
-  return { name: p?.name || '', sizes: p?.sizes || '', colours: p?.colours || '', no_thanks: p?.no_thanks || '', items: results };
+  const { results } = await env.DB.prepare(
+    'SELECT w.id, w.text, w.link, (wp.wish_id IS NOT NULL) AS photo FROM wishes w LEFT JOIN wish_photos wp ON wp.wish_id = w.id WHERE w.person_id = ? ORDER BY w.id'
+  ).bind(personId).all();
+  return { name: p?.name || '', sizes: p?.sizes || '', colours: p?.colours || '', no_thanks: p?.no_thanks || '', items: results.map((r) => ({ ...r, photo: !!r.photo })) };
 }
 
 // ---------------------------------------------------------------- API
@@ -624,19 +658,45 @@ async function handleApi(req, env, ctx, url) {
   if (route('POST', '/api/wishes')) {
     const me = await requirePerson(env, req);
     const b = await readBody(req);
-    const text = clip(b.text, 300);
+    let text = clip(b.text, 300);
     let link = clip(b.link, 500);
-    if (!text) fail(400, 'Please type what you would like.');
+    let photo = null;
+    if (b.photo) {
+      const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.photo));
+      if (!m) fail(400, "That photo didn't work. Please try a different one.");
+      if (m[2].length > 1_500_000) fail(400, 'That photo is too big. Please try a different one.');
+      photo = { mime: m[1], data: m[2] };
+    }
+    if (!text && photo) text = '📷 (see photo)';
+    if (!text) fail(400, 'Please type what you would like, or add a photo.');
     if (link && !/^https?:\/\//i.test(link)) link = /^[\w-]+(\.[\w-]+)+/.test(link) ? `https://${link}` : '';
     const count = (await env.DB.prepare('SELECT COUNT(*) c FROM wishes WHERE person_id = ?').bind(me.id).first()).c;
     if (count >= 30) fail(400, 'That is a lot of wishes! Please remove one first.');
-    await env.DB.prepare('INSERT INTO wishes (person_id, text, link, created_at) VALUES (?, ?, ?, ?)').bind(me.id, text, link, nowIso()).run();
+    const r = await env.DB.prepare('INSERT INTO wishes (person_id, text, link, created_at) VALUES (?, ?, ?, ?)').bind(me.id, text, link, nowIso()).run();
+    if (photo) await env.DB.prepare('INSERT INTO wish_photos (wish_id, person_id, mime, data) VALUES (?, ?, ?, ?)').bind(r.meta.last_row_id, me.id, photo.mime, photo.data).run();
     return json({ ok: true });
   }
   if (method === 'DELETE' && (match = path.match(/^\/api\/wishes\/(\d+)$/))) {
     const me = await requirePerson(env, req);
-    await env.DB.prepare('DELETE FROM wishes WHERE id = ? AND person_id = ?').bind(Number(match[1]), me.id).run();
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM wishes WHERE id = ? AND person_id = ?').bind(Number(match[1]), me.id),
+      env.DB.prepare('DELETE FROM wish_photos WHERE wish_id = ? AND person_id = ?').bind(Number(match[1]), me.id),
+    ]);
     return json({ ok: true });
+  }
+  // Photos: only the owner and the person buying for them can see them.
+  if (method === 'GET' && (match = path.match(/^\/api\/photo\/(\d+)$/))) {
+    const me = await requirePerson(env, req);
+    const ph = await env.DB.prepare('SELECT person_id, mime, data FROM wish_photos WHERE wish_id = ?').bind(Number(match[1])).first();
+    if (!ph) fail(404, 'Photo not found.');
+    if (ph.person_id !== me.id) {
+      const m = await getMatchFor(env, me);
+      if (!m || m.receiver_id !== ph.person_id || !me.spun_at) fail(404, 'Photo not found.');
+    }
+    const bin = atob(ph.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Response(bytes, { headers: { 'content-type': ph.mime, 'cache-control': 'private, max-age=86400' } });
   }
 
   // ---------- my person + spin
@@ -961,7 +1021,7 @@ async function handleAdmin(req, env, ctx, path, method) {
     const b = await readBody(req);
     if (b.confirm !== 'RESET') fail(400, 'Type RESET to confirm.');
     await env.DB.batch([
-      ...['people', 'sessions', 'matches', 'wishes', 'messages', 'wall', 'push_subs', 'notifications'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
+      ...['people', 'sessions', 'matches', 'wishes', 'wish_photos', 'messages', 'wall', 'push_subs', 'notifications'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
       env.DB.prepare(`UPDATE settings SET value = 'open' WHERE key = 'draw_status'`),
       env.DB.prepare(`DELETE FROM settings WHERE key IN ('draw_error', 'draw_error_for', 'drawn_at')`),
     ]);
@@ -995,4 +1055,4 @@ export default {
   },
 };
 
-export { findCycle, canGive };
+export { findCycle, findDraw, canGive };

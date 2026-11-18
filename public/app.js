@@ -66,7 +66,8 @@
     try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = label; }
   }
   const go = (hash) => { if (location.hash === hash) render(); else location.hash = hash; };
-  async function refresh() { S = await api('/api/state'); return S; }
+  let lastRefresh = 0;
+  async function refresh() { S = await api('/api/state'); lastRefresh = Date.now(); return S; }
   const siteUrl = () => location.origin + '/';
   // Ready-made WhatsApp messages for the organizer. Never mentions who drew whom.
   function reminderTemplates(o) {
@@ -470,7 +471,8 @@
   // ------------------------------------------------------------ wish lists
   function wishItems(items, { canDelete = false } = {}) {
     if (!items.length) return '';
-    return items.map((w) => `<div class="wish"><span class="w-icon" aria-hidden="true">🎁</span><div class="w-body">${esc(w.text)}${safeUrl(w.link) ? `<br><a href="${esc(w.link)}" target="_blank" rel="noopener">Open link ↗</a>` : ''}</div>
+    return items.map((w) => `<div class="wish"><span class="w-icon" aria-hidden="true">🎁</span><div class="w-body">${esc(w.text)}${safeUrl(w.link) ? `<br><a href="${esc(w.link)}" target="_blank" rel="noopener">Open link ↗</a>` : ''}
+        ${w.photo ? `<button type="button" class="w-photo" data-photo="${w.id}" aria-label="See photo bigger"><img src="/api/photo/${w.id}" alt="Photo of ${esc(w.text)}" loading="lazy"></button>` : ''}</div>
       ${canDelete ? `<button class="w-del" data-del="${w.id}" aria-label="Remove ${esc(w.text)}">Remove</button>` : ''}</div>`).join('');
   }
   // Sizes are saved as simple lines: "Shirt / Top: M"
@@ -491,6 +493,36 @@
     return rows.length ? `<dl class="about">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : '';
   }
   const customSizeRow = (what = '', val = '') => `<div class="size-row custom"><input type="text" class="size-what" maxlength="30" placeholder="What for? e.g. Ring" value="${esc(what)}" aria-label="What is this size for?"><input type="text" class="size-val" maxlength="30" placeholder="Size" value="${esc(val)}" aria-label="Size"><button type="button" class="size-x" aria-label="Remove this size">✕</button></div>`;
+  // Make photos small enough to upload quickly on any phone (max 1000px, JPEG).
+  function shrinkPhoto(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const max = 1000, scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+        const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        let q = 0.8, out = c.toDataURL('image/jpeg', q);
+        while (out.length > 900000 && q > 0.4) { q -= 0.15; out = c.toDataURL('image/jpeg', q); }
+        resolve(out);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+      img.src = url;
+    });
+  }
+  // Tap a photo to see it big; tap anywhere to close.
+  function wirePhotos() {
+    app.querySelectorAll('[data-photo]').forEach((b) => b.addEventListener('click', () => {
+      const box = document.createElement('div');
+      box.className = 'lightbox'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Photo');
+      box.innerHTML = `<img src="/api/photo/${b.dataset.photo}" alt=""><div class="lb-close">✕ Tap to close</div>`;
+      box.addEventListener('click', () => box.remove());
+      document.body.appendChild(box);
+    }));
+  }
   async function viewGiftee() {
     setTabs('home');
     if (!S.me.spun) return go('#home');
@@ -500,6 +532,7 @@
       <div class="card">${wishItems(w.items) || `<p>${fn} hasn't added anything yet. Ask them a secret question, or check back later!</p>`}</div>
       ${aboutBlock(w) ? `<div class="card"><h3>About ${fn}</h3>${aboutBlock(w)}</div>` : ''}
       <a class="btn" href="#thread/giftee">✉️ Ask ${fn} a secret question</a>`;
+    wirePhotos();
   }
   async function viewMyList() {
     setTabs('mylist');
@@ -512,6 +545,10 @@
         <textarea id="text" maxlength="300" required></textarea>
         <label for="link">Link (optional)<span class="hint">Paste a web link to the item, if you have one.</span></label>
         <input id="link" type="text" inputmode="url" autocapitalize="off" maxlength="500">
+        <label>Photo (optional)<span class="hint">A picture of the item, or a screenshot from a shop.</span></label>
+        <input id="photo-file" type="file" accept="image/*" hidden>
+        <div id="photo-preview" class="photo-preview" hidden></div>
+        <button class="btn white" type="button" data-act="pick-photo" style="margin-bottom:18px">📷 Add a photo</button>
         <button class="btn" type="submit">Add to my list</button>
       </form>
       <form class="card" id="about-form" novalidate>
@@ -529,10 +566,30 @@
         <button class="btn white" type="submit">Save</button>
       </form>`;
     const f = document.getElementById('wish-form');
+    let photoData = null;
+    const fileIn = document.getElementById('photo-file'), preview = document.getElementById('photo-preview'), pickBtn = f.querySelector('[data-act=pick-photo]');
+    pickBtn.addEventListener('click', () => fileIn.click());
+    fileIn.addEventListener('change', async () => {
+      const file = fileIn.files && fileIn.files[0];
+      fileIn.value = '';
+      if (!file) return;
+      const label = pickBtn.innerHTML; pickBtn.disabled = true; pickBtn.innerHTML = 'Getting your photo ready…';
+      try {
+        photoData = await shrinkPhoto(file);
+        preview.innerHTML = `<img src="${photoData}" alt="Your photo"><button type="button" class="btn small white" data-act="remove-photo">✕ Remove photo</button>`;
+        preview.hidden = false;
+        preview.querySelector('[data-act=remove-photo]').addEventListener('click', () => { photoData = null; preview.hidden = true; preview.innerHTML = ''; pickBtn.innerHTML = '📷 Add a photo'; });
+        pickBtn.innerHTML = '📷 Choose a different photo';
+      } catch {
+        toast("Sorry, that photo didn't work. Please try another one.");
+        pickBtn.innerHTML = label;
+      } finally { pickBtn.disabled = false; }
+    });
+    wirePhotos();
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       busy(f.querySelector('[type=submit]'), async () => {
-        try { await api('/api/wishes', { method: 'POST', body: { text: f.text.value, link: f.link.value } }); await refresh(); toast('Added! 🎁'); render(); }
+        try { await api('/api/wishes', { method: 'POST', body: { text: f.text.value, link: f.link.value, photo: photoData } }); await refresh(); toast('Added! 🎁'); render(); }
         catch (err) { showError(f, err.message); }
       });
     });
@@ -867,7 +924,8 @@
     const hash = location.hash.replace(/^#\/?/, '');
     const [page, arg] = hash.split('/');
     try {
-      if (!S) await refresh();
+      // Always show fresh status (e.g. names drawn while the page was open), at most every few seconds.
+      if (!S || Date.now() - lastRefresh > 4000) await refresh();
       if (page === 'organizer') return await viewOrganizer();
       if (!S.me) {
         if (page === 'join') return viewJoin();
