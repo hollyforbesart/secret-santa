@@ -580,7 +580,7 @@ async function handleApi(req, env, ctx, url) {
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'That email address does not look right.');
     await env.DB.prepare('UPDATE people SET email = ?, sizes = ?, colours = ?, no_thanks = ? WHERE id = ?').bind(
       email,
-      b.sizes === undefined ? me.sizes : clip(b.sizes, 300),
+      b.sizes === undefined ? me.sizes : clip(b.sizes, 600),
       b.colours === undefined ? me.colours : clip(b.colours, 300),
       b.no_thanks === undefined ? me.no_thanks : clip(b.no_thanks, 300),
       me.id

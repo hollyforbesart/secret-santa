@@ -473,10 +473,24 @@
     return items.map((w) => `<div class="wish"><span class="w-icon" aria-hidden="true">🎁</span><div class="w-body">${esc(w.text)}${safeUrl(w.link) ? `<br><a href="${esc(w.link)}" target="_blank" rel="noopener">Open link ↗</a>` : ''}</div>
       ${canDelete ? `<button class="w-del" data-del="${w.id}" aria-label="Remove ${esc(w.text)}">Remove</button>` : ''}</div>`).join('');
   }
-  function aboutBlock(w) {
-    const rows = [['👕 Sizes', w.sizes], ['🎨 Favourite colours & things', w.colours], ['🚫 Please no…', w.no_thanks]].filter(([, v]) => v);
-    return rows.length ? `<dl class="about">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : '';
+  // Sizes are saved as simple lines: "Shirt / Top: M"
+  const SIZE_PRESETS = [['Shirt / Top', '👕', 'e.g. M or Large'], ['Pants / Shorts', '👖', 'e.g. 32 or M'], ['Dress', '👗', 'e.g. 10 or M'], ['Shoes', '👟', 'e.g. 8']];
+  function parseSizes(text) {
+    return String(text || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+      const i = l.indexOf(':');
+      return i > 0 ? [l.slice(0, i).trim(), l.slice(i + 1).trim()] : ['Other', l];
+    });
   }
+  const sizeIcon = (label) => (SIZE_PRESETS.find((p) => p[0] === label) || [])[1] || '📏';
+  function aboutBlock(w) {
+    const sizes = parseSizes(w.sizes);
+    const rows = [];
+    if (sizes.length) rows.push(['📏 Sizes', sizes.map(([k, v]) => `${sizeIcon(k)} <strong>${esc(k)}:</strong> ${esc(v)}`).join('<br>')]);
+    if (w.colours) rows.push(['🎨 Favourite colours & things', esc(w.colours)]);
+    if (w.no_thanks) rows.push(['🚫 Please no…', esc(w.no_thanks)]);
+    return rows.length ? `<dl class="about">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>` : '';
+  }
+  const customSizeRow = (what = '', val = '') => `<div class="size-row custom"><input type="text" class="size-what" maxlength="30" placeholder="What for? e.g. Ring" value="${esc(what)}" aria-label="What is this size for?"><input type="text" class="size-val" maxlength="30" placeholder="Size" value="${esc(val)}" aria-label="Size"><button type="button" class="size-x" aria-label="Remove this size">✕</button></div>`;
   async function viewGiftee() {
     setTabs('home');
     if (!S.me.spun) return go('#home');
@@ -502,8 +516,12 @@
       </form>
       <form class="card" id="about-form" novalidate>
         <h3>🙋 About me</h3><p class="small-text muted">Optional, but it really helps!</p>
-        <label for="sizes">My sizes<span class="hint">Shirt, shoes, etc.</span></label>
-        <input id="sizes" type="text" maxlength="300" value="${esc(w.sizes)}">
+        <label>📏 My sizes<span class="hint">Fill in only the ones you want — leave the rest blank.</span></label>
+        <div id="size-rows">
+          ${SIZE_PRESETS.map(([label, icon, ph]) => `<div class="size-row"><label class="size-label" for="sz-${label.replace(/\W/g, '')}">${icon} ${esc(label)}</label><input type="text" id="sz-${label.replace(/\W/g, '')}" data-size="${esc(label)}" maxlength="30" placeholder="${esc(ph)}" value="${esc((parseSizes(w.sizes).find(([k]) => k === label) || [])[1] || '')}"></div>`).join('')}
+          ${parseSizes(w.sizes).filter(([k]) => !SIZE_PRESETS.some((p) => p[0] === k)).map(([k, v]) => customSizeRow(k, v)).join('')}
+        </div>
+        <button type="button" class="btn small white" data-act="add-size" style="margin-bottom:18px">➕ Add another size</button>
         <label for="colours">Favourite colours & things I like</label>
         <input id="colours" type="text" maxlength="300" value="${esc(w.colours)}">
         <label for="no_thanks">Please no…<span class="hint">Allergies, things you already have, etc.</span></label>
@@ -523,10 +541,27 @@
       await api(`/api/wishes/${b.dataset.del}`, { method: 'DELETE' }); await refresh(); render();
     }));
     const a = document.getElementById('about-form');
+    const rowsEl = document.getElementById('size-rows');
+    const wireX = () => rowsEl.querySelectorAll('.size-x').forEach((x) => { x.onclick = () => x.closest('.size-row').remove(); });
+    wireX();
+    a.querySelector('[data-act=add-size]').addEventListener('click', () => {
+      rowsEl.insertAdjacentHTML('beforeend', customSizeRow()); wireX();
+      rowsEl.lastElementChild.querySelector('.size-what').focus();
+    });
+    const collectSizes = () => {
+      const clean = (s) => String(s || '').replace(/[:\n]/g, ' ').trim();
+      const lines = [];
+      rowsEl.querySelectorAll('[data-size]').forEach((i) => { if (i.value.trim()) lines.push(`${i.dataset.size}: ${clean(i.value)}`); });
+      rowsEl.querySelectorAll('.size-row.custom').forEach((r) => {
+        const v = clean(r.querySelector('.size-val').value);
+        if (v) lines.push(`${clean(r.querySelector('.size-what').value) || 'Other'}: ${v}`);
+      });
+      return lines.join('\n');
+    };
     a.addEventListener('submit', (e) => {
       e.preventDefault();
       busy(a.querySelector('[type=submit]'), async () => {
-        try { await api('/api/me', { method: 'POST', body: { sizes: a.sizes.value, colours: a.colours.value, no_thanks: a.no_thanks.value } }); toast('Saved! ✅'); }
+        try { await api('/api/me', { method: 'POST', body: { sizes: collectSizes(), colours: a.colours.value, no_thanks: a.no_thanks.value } }); toast('Saved! ✅'); }
         catch (err) { showError(a, err.message); }
       });
     });

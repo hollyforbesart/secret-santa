@@ -116,6 +116,11 @@ input:focus, textarea:focus, select:focus { outline: 3px solid rgba(23,105,58,.3
 .wish .w-icon { font-size: 1.6rem; }
 .wish .w-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .wish .w-del { background: none; border: 2px solid var(--line); border-radius: 12px; font-size: 1rem; padding: 6px 12px; cursor: pointer; color: var(--muted); font-weight: 700; }
+.size-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center; margin: 0 0 10px; }
+.size-row.custom { grid-template-columns: 1fr 1fr auto; }
+.size-row input { margin: 0 !important; padding: 12px 14px !important; font-size: 1.1rem !important; }
+.size-row .size-label { margin: 0; font-size: 1.05rem; font-weight: 700; }
+.size-x { width: 44px; height: 44px; border-radius: 12px; border: 2px solid var(--line); background: #fff; font-size: 1.1rem; color: var(--muted); cursor: pointer; }
 .about dt { font-weight: 800; margin-top: 8px; }
 .about dd { margin: 0 0 4px; }
 
