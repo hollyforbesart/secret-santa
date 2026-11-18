@@ -11,7 +11,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "secret-santa"
+      "database_name": "secret-santa",
+      "database_id": "241209e4-0929-4279-8bcd-2131497d00a4"
     }
   ],
   // Checks every 15 minutes whether it's time to draw names.

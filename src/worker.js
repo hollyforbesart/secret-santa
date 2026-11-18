@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   welcome: "Ho ho ho! Christmas is coming and we're doing Secret Santa again. Tap below to tell us if you're in!",
   rsvp_deadline: '2026-11-25T03:59:00.000Z', // Tue Nov 24, 11:59 PM Trinidad
   draw_at: '2026-11-26T23:00:00.000Z', // Thu Nov 26, 7:00 PM Trinidad
+  organizer_name: 'Holly',
   budget: '300 TTD',
   budget_note: "You're welcome to spend more if you'd like!",
   exchange_note: '',
@@ -169,6 +170,11 @@ async function setSetting(env, key, value) {
 }
 async function addLog(env, text) {
   await env.DB.prepare('INSERT INTO log (at, text) VALUES (?, ?)').bind(nowIso(), text).run();
+}
+
+function lockedMsg(s, mins) {
+  const who = s.organizer_name || 'the organizer';
+  return `🔒 Too many wrong tries. Please message ${who} on WhatsApp to reset your PIN for you. (Or wait ${mins} minute${mins === 1 ? '' : 's'} and try again.)`;
 }
 
 function phaseOf(s) {
@@ -430,7 +436,7 @@ async function sendEmail(env, s, person, title, body, url) {
     <p>Hi ${escHtml(person.name)},</p><p>${escHtml(body)}</p>
     <p><a href="${escHtml(link)}" style="display:inline-block;background:#c8102e;color:#fff;padding:14px 22px;border-radius:12px;text-decoration:none;font-weight:bold">Open Secret Santa 🎅</a></p>
     <p style="color:#777;font-size:14px">${escHtml(s.title)}</p></div>`;
-  await fetch('https://api.brevo.com/v3/smtp/email', {
+  return fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: { 'api-key': env.BREVO_API_KEY, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ sender: { email: env.EMAIL_FROM, name: 'Family Secret Santa' }, to: [{ email: person.email, name: person.name }], subject: title, htmlContent: html }),
@@ -440,7 +446,7 @@ async function sendEmail(env, s, person, title, body, url) {
 // ---------------------------------------------------------------- data shapes
 function publicSettings(s) {
   const out = {};
-  for (const k of ['title', 'welcome', 'rsvp_deadline', 'draw_at', 'budget', 'budget_note', 'exchange_note']) out[k] = s[k] || '';
+  for (const k of ['title', 'welcome', 'organizer_name', 'rsvp_deadline', 'draw_at', 'budget', 'budget_note', 'exchange_note']) out[k] = s[k] || '';
   return out;
 }
 async function getMatchFor(env, me) {
@@ -504,7 +510,7 @@ async function handleApi(req, env, ctx, url) {
   // ---------- RSVP
   if (route('POST', '/api/rsvp')) {
     const s = await getSettings(env);
-    if (!rsvpOpen(s)) fail(400, 'Sorry, RSVPs are closed. Please message the organizer.');
+    if (!rsvpOpen(s)) fail(400, `Sorry, RSVPs are closed. Please message ${s.organizer_name || 'the organizer'}.`);
     const b = await readBody(req);
     const name = cleanName(b.name);
     if (name.length < 2) fail(400, 'Please type your name.');
@@ -545,13 +551,13 @@ async function handleApi(req, env, ctx, url) {
     if (!p) fail(404, 'We could not find that name.');
     if (p.locked_until && Date.now() < Date.parse(p.locked_until)) {
       const mins = Math.ceil((Date.parse(p.locked_until) - Date.now()) / 60000);
-      fail(429, `Too many wrong tries. Please wait ${mins} minute${mins === 1 ? '' : 's'}, or ask the organizer to reset your PIN.`);
+      fail(429, lockedMsg(s, mins));
     }
     if (!(await checkPin(s, String(b.pin || ''), p.pin_hash))) {
       const tries = p.failed_attempts + 1;
       if (tries >= 5) {
         await env.DB.prepare('UPDATE people SET failed_attempts = 0, locked_until = ? WHERE id = ?').bind(new Date(Date.now() + 5 * 60000).toISOString(), p.id).run();
-        fail(429, 'Too many wrong tries. Please wait 5 minutes, or ask the organizer to reset your PIN.');
+        fail(429, lockedMsg(s, 5));
       }
       await env.DB.prepare('UPDATE people SET failed_attempts = ? WHERE id = ?').bind(tries, p.id).run();
       fail(401, `That PIN isn't right. Please try again. (${5 - tries} ${5 - tries === 1 ? 'try' : 'tries'} left)`);
@@ -597,7 +603,7 @@ async function handleApi(req, env, ctx, url) {
   if (route('POST', '/api/me/withdraw')) {
     const me = await requirePerson(env, req);
     const s = await getSettings(env);
-    if (phaseOf(s) === 'drawn' && me.in_draw) fail(400, 'Names have already been drawn. Please message the organizer so they can take you out safely.');
+    if (phaseOf(s) === 'drawn' && me.in_draw) fail(400, `Names have already been drawn. Please message ${s.organizer_name || 'the organizer'} so you can be taken out safely.`);
     await env.DB.batch([
       env.DB.prepare(`UPDATE people SET rsvp = 'no' WHERE id = ?`).bind(me.id),
       env.DB.prepare('DELETE FROM sessions WHERE person_id = ?').bind(me.id),
@@ -809,7 +815,7 @@ async function handleAdmin(req, env, ctx, path, method) {
   if (route('POST', '/api/admin/settings')) {
     const b = await readBody(req);
     const s = await getSettings(env);
-    for (const k of ['title', 'welcome', 'budget', 'budget_note', 'exchange_note']) if (b[k] !== undefined) await setSetting(env, k, clip(b[k], k === 'welcome' ? 600 : 200));
+    for (const k of ['title', 'welcome', 'organizer_name', 'budget', 'budget_note', 'exchange_note']) if (b[k] !== undefined) await setSetting(env, k, clip(b[k], k === 'welcome' ? 600 : 200));
     for (const k of ['rsvp_deadline', 'draw_at']) {
       if (b[k] === undefined) continue;
       const v = b[k] ? new Date(b[k]).toISOString() : '';
@@ -901,6 +907,17 @@ async function handleAdmin(req, env, ctx, path, method) {
     if (p.in_draw) fail(400, `${p.name} is already in the draw.`);
     const ok = await insertLate(env, ctx, p);
     if (!ok) fail(400, `Could not fit ${p.name} in because of household rules.`);
+    return json({ ok: true });
+  }
+
+  if (route('POST', '/api/admin/test-email')) {
+    if (!emailEnabled(env)) fail(400, 'Email is not set up yet. Add BREVO_API_KEY and EMAIL_FROM in Cloudflare, then deploy again.');
+    const b = await readBody(req);
+    const to = clip(b.email, 120);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) fail(400, 'Please type a real email address.');
+    const s = await getSettings(env);
+    const res = await sendEmail(env, s, { name: s.organizer_name || 'there', email: to }, '🎄 Test email from Secret Santa', 'If you can read this, email alerts are working!', '/#organizer');
+    if (!res.ok) fail(400, `Brevo said no (${res.status}): ${(await res.text()).slice(0, 200)}`);
     return json({ ok: true });
   }
 

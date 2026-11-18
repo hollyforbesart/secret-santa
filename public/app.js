@@ -202,6 +202,7 @@
         <input id="pin" class="pin-input" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" required>
         <label for="pin2">Type the PIN again</label>
         <input id="pin2" class="pin-input" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" required>
+        <div class="card notice" style="padding:12px 16px;margin-top:-4px;box-shadow:none">🧠 <strong>Make sure you remember it!</strong> Write it down or save it in your phone if you need to. 😄</div>
         ${S.emailEnabled ? `<label for="email">Email (optional)<span class="hint">Only if you'd like an email when names are drawn or you get a message.</span></label>
         <input id="email" type="email" autocomplete="email" inputmode="email">` : ''}
         <button class="btn big red" type="submit">Count me in! 🎄</button>
@@ -259,7 +260,7 @@
         <label for="pin">Your PIN</label>
         <input id="pin" class="pin-input" type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" autofocus required>
         <button class="btn big" type="submit">Sign in</button>
-        <p class="small-text muted">Forgot your PIN? Message the organizer and they can set a new one for you.</p>
+        <p class="small-text muted">Forgot your PIN? Message ${esc(S.settings.organizer_name || 'the organizer')} on WhatsApp and they'll reset it for you.</p>
       </form>`;
     const f = document.getElementById('pin-form');
     const submit = () => busy(f.querySelector('[type=submit]'), async () => {
@@ -276,7 +277,7 @@
     const me = S.me;
     app.innerHTML = `<div class="page-head center"><div style="font-size:4rem" aria-hidden="true">🎉</div><h1>You're in, ${esc(firstName(me.name))}!</h1>
       <p>This phone will remember you, so next time just open the link.</p></div>
-      <div class="card notice"><strong>Remember your PIN</strong> — you'll need it if you use a different phone.</div>
+      <div class="card notice">🧠 <strong>Don't forget your PIN!</strong> You'll need it if you sign in on a different phone. Write it down somewhere safe. 😄</div>
       <div class="card"><h3>📝 Next: add your wish list</h3><p>Help your Secret Santa pick something you'll love.</p><a class="btn" href="#mylist">Add my wish list</a></div>
       <div class="card"><h3>👨‍👩‍👧 Know someone who should join?</h3><p>Send them the link on WhatsApp.</p><a class="btn whatsapp" href="${whatsappInvite()}" target="_blank" rel="noopener">Share on WhatsApp</a></div>
       ${await notifCard()}
@@ -614,6 +615,7 @@
         <div><label for="draw_at">Draw names on<span class="hint">Happens automatically</span></label><input id="draw_at" type="datetime-local" value="${toLocalInput(st.draw_at)}"></div></div>
         <div class="row"><div><label for="budget">Gift budget</label><input id="budget" type="text" value="${esc(st.budget)}"></div>
         <div><label for="budget_note">Budget note</label><input id="budget_note" type="text" value="${esc(st.budget_note)}"></div></div>
+        <label for="organizer_name">Organizer name<span class="hint">Shown when someone needs help, e.g. "Message Holly to reset your PIN"</span></label><input id="organizer_name" type="text" value="${esc(st.organizer_name)}">
         <label for="exchange_note">Gift exchange (optional)<span class="hint">e.g. "Christmas Day lunch at Granny's"</span></label><input id="exchange_note" type="text" value="${esc(st.exchange_note)}">
         <label for="households">Households<span class="hint">One family per line. People in the same household won't draw each other. When someone RSVPs, their first name is matched to this list. You can also edit each person's household below.</span></label>
         <textarea id="households" style="min-height:200px">${esc(st.households)}</textarea>
@@ -632,6 +634,7 @@
       <div class="card"><details><summary>⚠️ Practice run tools</summary>
         <p class="small-text">After a practice run, this clears everyone out (people, wish lists, messages, draw). Dates and settings are kept.</p>
         <button class="btn small red" data-act="reset-all">Clear everyone out</button></details>
+        ${o.emailEnabled ? `<form id="test-email" class="row" style="margin-top:12px" novalidate><input id="te" type="email" placeholder="Your email" style="margin:0"><button class="btn small white" type="submit" style="flex:0 0 auto">Send test email</button></form>` : ''}
         <p class="small-text muted" style="margin-top:12px">Email alerts: ${o.emailEnabled ? 'on ✅' : 'not set up'} · Helper key for the sealed list: ${o.opsEnabled ? 'set up ✅' : 'not set up'}</p>
         <button class="link-btn" data-act="admin-logout">Sign out of organizer</button></div>`;
 
@@ -657,7 +660,7 @@
       busy(sf.querySelector('[type=submit]'), async () => {
         try {
           await api('/api/admin/settings', { method: 'POST', body: {
-            title: sf.elements.namedItem('title').value, welcome: sf.welcome.value, budget: sf.budget.value, budget_note: sf.budget_note.value, exchange_note: sf.exchange_note.value,
+            title: sf.elements.namedItem('title').value, welcome: sf.welcome.value, budget: sf.budget.value, budget_note: sf.budget_note.value, exchange_note: sf.exchange_note.value, organizer_name: sf.organizer_name.value,
             rsvp_deadline: fromLocalInput(sf.rsvp_deadline.value), draw_at: fromLocalInput(sf.draw_at.value), households: sf.households.value,
           } });
           await refresh(); toast('Saved ✅'); reload();
@@ -680,6 +683,10 @@
     app.querySelectorAll('[data-fit]').forEach((b) => b.addEventListener('click', async () => {
       try { await api(`/api/admin/person/${b.dataset.fit}/fit`, { method: 'POST' }); toast('Added into the draw ✅'); reload(); } catch (err) { toast(err.message); }
     }));
+    document.getElementById('test-email')?.addEventListener('submit', (e) => {
+      e.preventDefault(); const f = e.currentTarget;
+      busy(f.querySelector('[type=submit]'), async () => { try { await api('/api/admin/test-email', { method: 'POST', body: { email: f.te.value.trim() } }); toast('Test email sent! Check your inbox (and spam).'); } catch (err) { toast(err.message); } });
+    });
     const af = document.getElementById('announce-form');
     af.addEventListener('submit', (e) => {
       e.preventDefault();
