@@ -33,12 +33,19 @@
   const fromLocalInput = (v) => v ? new Date(`${v}:00-04:00`).toISOString() : '';
 
   async function api(path, { method = 'GET', body } = {}) {
-    const res = await fetch(path, {
+    const opts = {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
       credentials: 'same-origin',
-    });
+    };
+    let res;
+    try { res = await fetch(path, opts); }
+    catch {
+      // Phone lost signal for a moment ("Load failed" on iPhone). Retry reads once; never resend a form twice.
+      if (method === 'GET') { await new Promise((r) => setTimeout(r, 1200)); try { res = await fetch(path, opts); } catch { /* fall through */ } }
+      if (!res) throw new Error("Couldn't reach the Secret Santa site. Please check your internet and try again.");
+    }
     let data = {};
     try { data = await res.json(); } catch { /* ignore */ }
     if (!res.ok) { const e = new Error(data.error || 'Something went wrong. Please try again.'); e.status = res.status; throw e; }
