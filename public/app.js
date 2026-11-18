@@ -61,6 +61,54 @@
   const go = (hash) => { if (location.hash === hash) render(); else location.hash = hash; };
   async function refresh() { S = await api('/api/state'); return S; }
   const siteUrl = () => location.origin + '/';
+  // Ready-made WhatsApp messages for the organizer. Never mentions who drew whom.
+  function reminderTemplates(o) {
+    const st = o.settings, link = siteUrl();
+    const yes = o.people.filter((p) => p.rsvp === 'yes');
+    const names = (list) => list.map((p) => firstName(p.name)).join(', ');
+    const t = [];
+    if (o.phase === 'rsvp') {
+      t.push({ key: 'rsvp', label: '⏰ RSVP reminder', text: [
+        `⏰ Reminder! Have you RSVP'd for ${st.title}?`,
+        `Tap the link to say yes or no — it takes 1 minute, no account needed:`, link,
+        st.rsvp_deadline ? `\nPlease answer by ${fmtDateTime(st.rsvp_deadline)}.` : '',
+        yes.length ? `\n🎉 ${yes.length} in so far: ${names(yes)}` : '',
+      ].filter(Boolean).join('\n') });
+    }
+    if (o.phase !== 'drawn') {
+      t.push({ key: 'wish', label: '📝 Add your wish list', text: [
+        `🎁 Names will be drawn ${st.draw_at ? `automatically on ${fmtDateTime(st.draw_at)}` : 'soon'}!`,
+        `Before then, please add your wish list so your Secret Santa knows what you'd like:`, link,
+      ].join('\n') });
+    }
+    if (o.phase === 'drawn') {
+      t.push({ key: 'drawn', label: '🎅 Names are drawn!', text: [
+        `🎅 Names have been drawn!`,
+        `Open the link, sign in, and spin the wheel to see who you got:`, link,
+        `\nShh, keep it a secret! 🤫 You can send your person anonymous questions on the site.`,
+      ].join('\n') });
+    }
+    const noSpin = o.phase === 'drawn' ? yes.filter((p) => p.in_draw && !p.spun) : [];
+    const noWish = yes.filter((p) => !p.wishes);
+    if (noSpin.length || noWish.length) {
+      t.push({ key: 'nudge', label: `👋 Nudge (${new Set([...noSpin, ...noWish].map((p) => p.id)).size})`, text: [
+        `👋 Friendly nudge for Secret Santa!`,
+        noSpin.length ? `\n🎡 Still need to spin the wheel: ${names(noSpin)}` : '',
+        noWish.length ? `\n📝 Still need a wish list: ${names(noWish)}` : '',
+        `\nIt only takes a minute: ${link}`,
+        `Forgot your PIN? Just message me 😊`,
+      ].filter(Boolean).join('\n') });
+    }
+    t.push({ key: 'gift', label: '🎄 Gift day reminder', text: [
+      `🎄 Secret Santa reminder!`,
+      st.exchange_note ? `Gifts: ${st.exchange_note}` : `Don't forget your Secret Santa gift!`,
+      st.budget ? `Budget: ${st.budget}${st.budget_note ? ` (${st.budget_note})` : ''}` : '',
+      `\nNeed ideas? Check your person's wish list: ${link}`,
+    ].filter(Boolean).join('\n') });
+    t.push({ key: 'custom', label: '✏️ Write my own', text: `\n\n${link}` });
+    return t;
+  }
+
   function whatsappInvite() {
     const st = S.settings;
     const lines = [
@@ -608,6 +656,14 @@
         <a class="btn whatsapp" href="${whatsappInvite()}" target="_blank" rel="noopener">Share on WhatsApp</a>
         <button class="btn white" data-act="copy">Copy the link</button></div>
 
+      <div class="card" id="wa-card"><h3>💬 WhatsApp messages</h3>
+        <p class="small-text">Pick a message, change the words if you like, then tap the green button and choose your Secret Santa group. These never say who drew whom.</p>
+        <div class="chips" style="margin-bottom:12px">${reminderTemplates(o).map((t, i) => `<button type="button" class="btn small ${i === 0 ? '' : 'white'}" data-tpl="${t.key}">${esc(t.label)}</button>`).join('')}</div>
+        <label for="wa-text" class="small-text">Message</label>
+        <textarea id="wa-text" style="min-height:190px">${esc(reminderTemplates(o)[0].text)}</textarea>
+        <button class="btn whatsapp" data-act="wa-send">Open in WhatsApp</button>
+        <button class="btn small white" data-act="wa-copy">Copy message</button></div>
+
       <form class="card" id="settings-form" novalidate><h3>🗓️ Dates & details</h3>
         <label for="title">Title</label><input id="title" type="text" value="${esc(st.title)}">
         <label for="welcome">Welcome message</label><textarea id="welcome">${esc(st.welcome)}</textarea>
@@ -653,6 +709,18 @@
       toast('Draw cancelled. Set a new draw date.'); reload();
     });
     app.querySelector('#late')?.addEventListener('change', async (e) => { await api('/api/admin/settings', { method: 'POST', body: { late_join: e.target.checked } }); toast('Saved ✅'); });
+    const tpls = reminderTemplates(o), waText = document.getElementById('wa-text');
+    app.querySelectorAll('[data-tpl]').forEach((b) => b.addEventListener('click', () => {
+      waText.value = tpls.find((t) => t.key === b.dataset.tpl).text;
+      app.querySelectorAll('[data-tpl]').forEach((x) => x.classList.toggle('white', x !== b));
+      if (b.dataset.tpl === 'custom') { waText.focus(); waText.setSelectionRange(0, 0); }
+    }));
+    app.querySelector('[data-act=wa-send]').addEventListener('click', () => {
+      window.open(`https://wa.me/?text=${encodeURIComponent(waText.value.trim())}`, '_blank', 'noopener');
+    });
+    app.querySelector('[data-act=wa-copy]').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(waText.value.trim()); toast('Message copied!'); } catch { waText.select(); toast('Press and hold to copy.'); }
+    });
     app.querySelector('[data-act=copy]').addEventListener('click', async () => { try { await navigator.clipboard.writeText(siteUrl()); toast('Link copied!'); } catch { prompt('Copy this link:', siteUrl()); } });
     const sf = document.getElementById('settings-form');
     sf.addEventListener('submit', (e) => {
