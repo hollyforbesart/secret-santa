@@ -622,17 +622,47 @@
     const { posts } = await api('/api/wall');
     app.innerHTML = `<div class="page-head"><h1>💬 Family Chat</h1><p class="small-text">Everyone in the Secret Santa can see this. Don't give away who you got! 🤫</p></div>
       <form class="card" id="wall-form" novalidate>
-        <label for="body">Write something to the family</label>
+        <div id="reply-banner" class="reply-banner" hidden></div>
+        <label for="body" id="wall-label">Write something to the family</label>
         <textarea id="body" maxlength="1000" required></textarea>
-        <button class="btn" type="submit">Post</button>
+        <button class="btn" type="submit" id="wall-send">Post</button>
       </form>
-      <div class="card">${posts.map((p) => `<div class="post ${p.announcement ? 'announce' : ''}"><div class="who">${p.announcement ? '<span class="avatar" style="background:#c99a2e">📣</span>' : avatar(p.name)}<span>${esc(p.name)} <span class="when">· ${esc(fmtWhen(p.at))}</span></span></div>
-        <div class="text">${linkify(p.body)}</div>${p.mine ? `<button class="link-btn del" data-del="${p.id}">Delete</button>` : ''}</div>`).join('') || '<p class="muted" style="margin:0">No posts yet. Say hello! 👋</p>'}</div>`;
+      <div class="card">${posts.map((p) => `<div class="post ${p.announcement ? 'announce' : ''}" id="post-${p.id}"><div class="who">${p.announcement ? '<span class="avatar" style="background:#c99a2e">📣</span>' : avatar(p.name)}<span>${esc(p.name)} <span class="when">· ${esc(fmtWhen(p.at))}</span></span></div>
+        ${p.replyTo ? (p.replyTo.id
+          ? `<button type="button" class="quote" data-jump="${p.replyTo.id}"><span class="q-name">↩️ ${esc(p.replyTo.name)}</span><span class="q-body">${esc(p.replyTo.body)}</span></button>`
+          : '<div class="quote q-gone">↩️ Replying to a message that was deleted</div>') : ''}
+        <div class="text">${linkify(p.body)}</div>
+        <div class="post-actions"><button class="link-btn" data-reply="${p.id}" data-name="${esc(p.name)}" data-snippet="${esc(p.body.length > 80 ? p.body.slice(0, 77) + '…' : p.body)}">↩️ Reply</button>${p.mine ? `<button class="link-btn del" data-del="${p.id}">Delete</button>` : ''}</div></div>`).join('') || '<p class="muted" style="margin:0">No posts yet. Say hello! 👋</p>'}</div>`;
     const f = document.getElementById('wall-form');
+    const banner = document.getElementById('reply-banner');
+    let replyTo = null;
+    const setReply = (id, name, snippet) => {
+      replyTo = id;
+      if (!id) {
+        banner.hidden = true; banner.innerHTML = '';
+        document.getElementById('wall-label').textContent = 'Write something to the family';
+        document.getElementById('wall-send').textContent = 'Post';
+        return;
+      }
+      banner.innerHTML = `<div><strong>↩️ Replying to ${esc(name)}</strong><span class="q-body">${esc(snippet)}</span></div><button type="button" class="size-x" aria-label="Cancel reply">✕</button>`;
+      banner.hidden = false;
+      banner.querySelector('button').addEventListener('click', () => setReply(null));
+      document.getElementById('wall-label').textContent = `Your reply to ${firstName(name)}`;
+      document.getElementById('wall-send').textContent = 'Send reply';
+      f.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(() => f.body.focus(), 300);
+    };
+    app.querySelectorAll('[data-reply]').forEach((b) => b.addEventListener('click', () => setReply(Number(b.dataset.reply), b.dataset.name, b.dataset.snippet)));
+    app.querySelectorAll('[data-jump]').forEach((q) => q.addEventListener('click', () => {
+      const el = document.getElementById(`post-${q.dataset.jump}`);
+      if (!el) return toast('That message is further back in the chat.');
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    }));
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       busy(f.querySelector('[type=submit]'), async () => {
-        try { await api('/api/wall', { method: 'POST', body: { body: f.body.value } }); render(); }
+        try { await api('/api/wall', { method: 'POST', body: { body: f.body.value, reply_to: replyTo } }); render(); }
         catch (err) { showError(f, err.message); }
       });
     });

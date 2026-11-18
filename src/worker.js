@@ -90,6 +90,10 @@ let schemaReady = false;
 async function ensureSchema(env) {
   if (schemaReady) return;
   await env.DB.batch(SCHEMA.map((s) => env.DB.prepare(s)));
+  // Columns added after launch (safe to run every time; ignored if already there).
+  for (const sql of ['ALTER TABLE wall ADD COLUMN reply_to INTEGER']) {
+    try { await env.DB.prepare(sql).run(); } catch (e) { if (!/duplicate column/i.test(String(e.message))) throw e; }
+  }
   schemaReady = true;
 }
 
@@ -690,19 +694,35 @@ async function handleApi(req, env, ctx, url) {
   if (route('GET', '/api/wall')) {
     const me = await requirePerson(env, req);
     const { results } = await env.DB.prepare(
-      `SELECT w.id, w.body, w.created_at, w.is_announcement, w.person_id, p.name FROM wall w LEFT JOIN people p ON p.id = w.person_id ORDER BY w.id DESC LIMIT 150`
+      `SELECT w.id, w.body, w.created_at, w.is_announcement, w.person_id, w.reply_to, p.name,
+         q.id AS q_id, q.body AS q_body, q.is_announcement AS q_ann, qp.name AS q_name
+       FROM wall w LEFT JOIN people p ON p.id = w.person_id
+       LEFT JOIN wall q ON q.id = w.reply_to LEFT JOIN people qp ON qp.id = q.person_id
+       ORDER BY w.id DESC LIMIT 150`
     ).all();
     if (results.length) await env.DB.prepare('UPDATE people SET wall_seen_id = ? WHERE id = ?').bind(results[0].id, me.id).run();
-    return json({ posts: results.map((r) => ({ id: r.id, body: r.body, at: r.created_at, name: r.is_announcement ? 'Organizer' : r.name || 'Someone', announcement: !!r.is_announcement, mine: r.person_id === me.id })) });
+    const snippet = (t) => (t.length > 120 ? t.slice(0, 117) + '…' : t);
+    return json({ posts: results.map((r) => ({
+      id: r.id, body: r.body, at: r.created_at, name: r.is_announcement ? 'Organizer' : r.name || 'Someone', announcement: !!r.is_announcement, mine: r.person_id === me.id,
+      replyTo: r.reply_to ? (r.q_id ? { id: r.q_id, name: r.q_ann ? 'Organizer' : r.q_name || 'Someone', body: snippet(r.q_body) } : { id: null, name: '', body: '' }) : null,
+    })) });
   }
   if (route('POST', '/api/wall')) {
     const me = await requirePerson(env, req);
     const b = await readBody(req);
     const body = clip(b.body, 1000);
     if (!body) fail(400, 'Please type a message.');
-    await env.DB.prepare('INSERT INTO wall (person_id, body, created_at) VALUES (?, ?, ?)').bind(me.id, body, nowIso()).run();
+    let parent = null;
+    if (b.reply_to) {
+      parent = await env.DB.prepare('SELECT id, person_id FROM wall WHERE id = ?').bind(Number(b.reply_to) || 0).first();
+      if (!parent) fail(400, 'That message was deleted, so you can’t reply to it. You can still post normally.');
+    }
+    await env.DB.prepare('INSERT INTO wall (person_id, body, created_at, reply_to) VALUES (?, ?, ?, ?)').bind(me.id, body, nowIso(), parent ? parent.id : null).run();
+    const short = body.length > 90 ? body.slice(0, 87) + '…' : body;
     const { results } = await env.DB.prepare(`SELECT id FROM people WHERE rsvp = 'yes' AND removed = 0 AND id != ?`).bind(me.id).all();
-    await notify(env, ctx, results.map((r) => r.id), { title: `💬 ${me.name} posted in the family chat`, body: body.length > 90 ? body.slice(0, 87) + '…' : body, url: '/#wall' });
+    const replyTarget = parent && parent.person_id && parent.person_id !== me.id ? parent.person_id : null;
+    if (replyTarget) await notify(env, ctx, [replyTarget], { title: `↩️ ${me.name} replied to you in the family chat`, body: short, url: '/#wall' });
+    await notify(env, ctx, results.map((r) => r.id).filter((id) => id !== replyTarget), { title: `💬 ${me.name} posted in the family chat`, body: short, url: '/#wall' });
     return json({ ok: true });
   }
   if (method === 'DELETE' && (match = path.match(/^\/api\/wall\/(\d+)$/))) {

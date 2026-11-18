@@ -136,7 +136,16 @@ input:focus, textarea:focus, select:focus { outline: 3px solid rgba(23,105,58,.3
 .post .when { font-weight: 400; color: var(--muted); font-size: .9rem; }
 .post .text { margin: 6px 0 0 46px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .post.announce { background: #fff3cd; border-radius: 14px; padding: 14px; border: none; margin-bottom: 8px; }
-.post .del { margin-left: 46px; }
+.post-actions { margin-left: 46px; display: flex; gap: 18px; }
+.post-actions .link-btn { padding: 8px 0 0; }
+.quote { display: block; width: calc(100% - 46px); margin: 8px 0 0 46px; padding: 8px 12px; text-align: left; background: var(--cream); border: none; border-left: 4px solid var(--green); border-radius: 10px; font: inherit; font-size: .95rem; color: var(--ink); cursor: pointer; }
+.quote .q-name { display: block; font-weight: 800; color: var(--green-dark); }
+.q-body { display: block; color: var(--muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.quote.q-gone { color: var(--muted); font-style: italic; cursor: default; }
+.reply-banner { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; background: var(--cream); border-left: 4px solid var(--green); border-radius: 12px; padding: 10px 12px; margin: 0 0 14px; }
+.reply-banner > div { min-width: 0; }
+.post.flash { animation: flash 1.6s ease; }
+@keyframes flash { 0%, 40% { background: #fff3cd; } 100% { background: transparent; } }
 
 /* wheel */
 .wheel-wrap { position: relative; width: min(92vw, 420px); margin: 10px auto 20px; aspect-ratio: 1; }
