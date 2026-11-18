@@ -219,6 +219,23 @@
   }
   const backLink = (hash = 'home', label = 'Back') => `<a class="back" href="#${hash}">← ${label}</a>`;
 
+  function homeScreenCard() {
+    if (isStandalone()) return '';
+    return `<div class="card"><h3>📲 Put it on your Home Screen</h3>
+        <p>So you can open Secret Santa with one tap, like an app — and get notifications.</p>
+        <details ${isIOS() ? 'open' : ''}><summary>🍎 iPhone or iPad</summary><ol class="steps" style="margin-top:10px">
+          <li>Open this link in <strong>Safari</strong>${inAppBrowser() ? ' (tap <strong>⋯</strong> or the compass, then <strong>"Open in Safari"</strong>)' : ''}.</li>
+          <li>Tap the <strong>Share</strong> button — the square with an arrow pointing up <span aria-hidden="true">⬆️</span> (at the bottom or top of the screen).</li>
+          <li>Scroll down and tap <strong>"Add to Home Screen"</strong>.</li>
+          <li>Tap <strong>"Add"</strong>. Look for the Santa 🎅 icon on your Home Screen!</li></ol></details>
+        <details ${isIOS() ? '' : 'open'}><summary>🤖 Android</summary><ol class="steps" style="margin-top:10px">
+          <li>Open this link in <strong>Chrome</strong>${inAppBrowser() ? ' (tap <strong>⋮</strong>, then <strong>"Open in Chrome"</strong>)' : ''}.</li>
+          <li>Tap the <strong>⋮</strong> menu (three dots, top right).</li>
+          <li>Tap <strong>"Add to Home screen"</strong> (or <strong>"Install app"</strong>).</li>
+          <li>Tap <strong>"Add"</strong>. Look for the Santa 🎅 icon on your Home Screen!</li></ol></details>
+        <p class="small-text muted" style="margin:10px 0 0">After you open it from the Home Screen, sign in once with your name and PIN.</p></div>`;
+  }
+
   // ------------------------------------------------------------ views: signed out
   function viewLanding() {
     setTabs(null);
@@ -242,7 +259,9 @@
         <li><strong>Say yes</strong> and pick a 4-number PIN (no account, no email needed).</li>
         <li><strong>Add your wish list</strong> so your Secret Santa knows what you'd like.</li>
         <li><strong>On draw day</strong>, names are picked automatically. You spin the wheel to see who you got!</li>
-        <li><strong>Send secret messages</strong> to ask your person what they'd like — they won't know it's you.</li></ol></div>
+        <li><strong>Send secret messages</strong> to ask your person what they'd like — they won't know it's you.</li>
+        <li><strong>Chat with the whole family</strong> in the 💬 Family Chat tab — say hi, plan the gift day, share the excitement (just don't give away who you got! 🤫).</li></ol></div>
+      ${homeScreenCard()}
       ${whoIsIn()}`;
   }
 
@@ -366,6 +385,7 @@
       ${infoCards()}
       ${S.rsvpOpen ? `<div class="card"><h3>👨‍👩‍👧 Invite family</h3><p>Anyone with the link can join.</p><a class="btn whatsapp" href="${whatsappInvite()}" target="_blank" rel="noopener">Share on WhatsApp</a></div>` : ''}
       ${await notifCard()}
+      ${homeScreenCard()}
       ${whoIsIn()}
       <p class="center"><a href="#settings">⚙️ My settings</a></p>`;
     wireNotif(app);
